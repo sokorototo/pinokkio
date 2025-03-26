@@ -1,0 +1,11 @@
+[package]
+name = "pinokkio"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+oneshot = { version = "0.1.11", default-features = false }
+waker-fn = "1.2.0"
+
+[dev-dependencies]
+futures-lite = { version = "2.6.0", default-features = false }
