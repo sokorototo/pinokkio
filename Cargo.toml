@@ -8,4 +8,4 @@ oneshot = { version = "0.1.11", default-features = false }
 waker-fn = "1.2.0"
 
 [dev-dependencies]
-futures-lite = { version = "2.6.0", default-features = false }
+futures = { version = "0.3" }

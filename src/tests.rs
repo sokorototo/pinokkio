@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::*;
 use crate::timers::sleep;
 
@@ -19,7 +21,7 @@ fn auto_tasks() {
 		let mut counter = 60;
 
 		loop {
-			futures_lite::future::yield_now().await;
+			futures::future::ready(()).await;
 			counter -= 1;
 
 			println!("Counter = {}", counter);
@@ -57,23 +59,22 @@ fn sleep_tasks() {
 fn green_threads() {
 	let mut rt = Runtime::new();
 
-	fn task(i: usize) -> impl Future<Output = ()> {
+	fn task<R: fmt::Display>(id: R) -> impl Future<Output = ()> {
 		async move {
-			println!("[{}] Sleeping for 5s", i);
+			println!("[{}] Sleeping for 5s", id);
 
 			for i in 0..5 {
-				println!("{}s left", 5 - i);
+				println!("[{}]: {}s left", id, 5 - i);
 				sleep(time::Duration::from_secs(1)).await;
 			}
 
-			println!("[{}] Done sleeping", i);
+			println!("[{}] Done sleeping", id);
 		}
 	}
 
-	let task_1 = rt.spawn(task(1));
-	let task_2 = rt.spawn(task(2));
+	let tasks = (0..5).map(|id| rt.spawn(task(id)));
+	let join = futures::future::join_all(tasks);
 
-	rt.block_on(async move {
-		futures_lite::future::zip(task_1, task_2).await;
-	});
+	let results = rt.block_on(join).unwrap();
+	assert!(results.len() == 5);
 }
