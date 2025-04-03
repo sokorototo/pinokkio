@@ -1,22 +1,40 @@
-use std::fmt;
+use std::{fmt, time};
 
 use super::*;
 use crate::timers::sleep;
 
 #[test]
-fn simple_chain() {
+fn simple() {
 	let fut_1 = async { 42 };
 	let fut_2 = async move { fut_1.await + 1 };
 	let fut_3 = async move { fut_2.await + 1 };
 
-	let mut rt = Runtime::new();
+	let mut rt = rt::Runtime::new();
 	let result = rt.block_on(fut_3);
 
-	assert_eq!(result, Some(44));
+	assert_eq!(result, 44);
 }
 
 #[test]
-fn auto_tasks() {
+fn sleep_tasks() {
+	let mut rt = rt::Runtime::new();
+
+	let sleep_5s = async {
+		println!("Sleeping for 5s");
+
+		for i in 0..5 {
+			println!("{}s left", 5 - i);
+			sleep(time::Duration::from_secs(1)).await;
+		}
+
+		println!("Done sleeping");
+	};
+
+	rt.block_on(sleep_5s);
+}
+
+#[test]
+fn task_spawn() {
 	let fut_60 = async {
 		let mut counter = 60;
 
@@ -31,33 +49,15 @@ fn auto_tasks() {
 		}
 	};
 
-	let mut rt = Runtime::new();
+	let mut rt = rt::Runtime::new();
 	let monitor = rt.spawn(fut_60);
 
-	rt.block_on(monitor).unwrap();
-}
-
-#[test]
-fn sleep_tasks() {
-	let mut rt = Runtime::new();
-
-	let sleep_5s = async {
-		println!("Sleeping for 5s");
-
-		for i in 0..5 {
-			println!("{}s left", 5 - i);
-			sleep(time::Duration::from_secs(1)).await;
-		}
-
-		println!("Done sleeping");
-	};
-
-	rt.block_on(sleep_5s).unwrap();
+	rt.block_on(monitor);
 }
 
 #[test]
 fn green_threads() {
-	let mut rt = Runtime::new();
+	let mut rt = rt::Runtime::new();
 
 	fn task<R: fmt::Display>(id: R) -> impl Future<Output = ()> {
 		async move {
@@ -75,6 +75,6 @@ fn green_threads() {
 	let tasks = (0..5).map(|id| rt.spawn(task(id)));
 	let join = futures::future::join_all(tasks);
 
-	let results = rt.block_on(join).unwrap();
+	let results = rt.block_on(join);
 	assert!(results.len() == 5);
 }
