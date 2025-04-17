@@ -1,7 +1,10 @@
-use std::{fmt, time};
-
 use super::*;
-use crate::timers::sleep;
+
+#[cfg(feature = "timers")]
+use {
+	crate::timers::sleep,
+	std::{fmt, time},
+};
 
 #[test]
 fn simple() {
@@ -13,24 +16,6 @@ fn simple() {
 	let result = rt.block_on(fut_3);
 
 	assert_eq!(result, 44);
-}
-
-#[test]
-fn sleep_tasks() {
-	let mut rt = rt::Runtime::new();
-
-	let sleep_5s = async {
-		println!("Sleeping for 5s");
-
-		for i in 0..5 {
-			println!("{}s left", 5 - i);
-			sleep(time::Duration::from_secs(1)).await;
-		}
-
-		println!("Done sleeping");
-	};
-
-	rt.block_on(sleep_5s);
 }
 
 #[test]
@@ -56,6 +41,29 @@ fn task_spawn() {
 }
 
 #[test]
+#[cfg(feature = "timers")]
+fn sleep_tasks() {
+	let mut rt = rt::Runtime::new();
+
+	let sleep_5s = async {
+		println!("Sleeping for 5s");
+
+		for i in 0..5 {
+			println!("{}s left", 5 - i);
+			sleep(time::Duration::from_secs(1)).await;
+		}
+
+		println!("Done sleeping");
+	};
+
+	// initialize Sleep subroutine
+	rt.spawn(timers::SleepSubroutine);
+
+	rt.block_on(sleep_5s);
+}
+
+#[test]
+#[cfg(feature = "timers")]
 fn green_threads() {
 	let mut rt = rt::Runtime::new();
 
@@ -71,6 +79,9 @@ fn green_threads() {
 			println!("[{}] Done sleeping", id);
 		}
 	}
+
+	// initialize Sleep subroutine
+	rt.spawn(timers::SleepSubroutine);
 
 	let tasks = (0..5).map(|id| rt.spawn(task(id)));
 	let join = futures::future::join_all(tasks);

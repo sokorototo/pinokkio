@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 oneshot = { version = "0.1.11", default-features = false }
-waker-fn = "1.2.0"
+
+[features]
+timers = []
 
 [dev-dependencies]
 futures = { version = "0.3" }

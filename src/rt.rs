@@ -1,24 +1,28 @@
 use super::*;
 
-use std::{collections, future::Future, sync::mpsc, task, time};
-use waker_fn::waker_fn;
+use std::{cell, collections, future::Future, mem, task};
 
+/// A minimal single-threaded async runtime
 pub struct Runtime {
 	/// Stores tasks to be polled when woken
 	tasks: collections::BTreeMap<usize, tasks::Task>,
 
-	/// Used by Wakers to queue a task to be polled in `Runtime::poll`
-	task_tx: mpsc::Sender<usize>,
-	/// Polls the next task
-	task_rx: mpsc::Receiver<usize>,
+	/// queue of tasks woken by various wakers
+	queue: cell::RefCell<Vec<usize>>,
+
+	/// currently processing tasks: double-buffered with `queue` during `poll`
+	woken: Vec<usize>,
 }
 
 impl Runtime {
 	pub fn new() -> Self {
-		let (task_tx, task_rx) = mpsc::channel();
-		Self { task_tx, task_rx, tasks: collections::BTreeMap::new() }
+		let queue = cell::RefCell::new(Vec::new());
+		let woken = Vec::new();
+
+		Self { queue, woken, tasks: collections::BTreeMap::new() }
 	}
 
+	/// Blocks execution, continuously polling tasks and waiting for `fut` to complete
 	pub fn block_on<T: 'static, F: Future<Output = T> + 'static>(&mut self, fut: F) -> T {
 		let task_id = self.tasks.len();
 		let (results_tx, results_rx) = oneshot::channel();
@@ -44,6 +48,7 @@ impl Runtime {
 		}
 	}
 
+	/// Spawns a future as a [`Task`](tasks::Task), and returns a [`TaskMonitor`](tasks::TaskMonitor)
 	pub fn spawn<T: 'static, F: Future<Output = T> + 'static>(&mut self, fut: F) -> tasks::TaskMonitor<T> {
 		let task_id = self.tasks.len();
 		let (result_tx, result_rx) = oneshot::channel();
@@ -65,54 +70,64 @@ impl Runtime {
 	}
 
 	fn insert_task(&mut self, id: usize) -> task::Waker {
-		waker_fn({
-			let tx = self.task_tx.clone();
-			move || tx.send(id).unwrap()
-		})
+		type WakerData = (*const cell::RefCell<Vec<usize>>, usize);
+		static WAKER_VTABLE: task::RawWakerVTable = task::RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+
+		unsafe fn clone(data: *const ()) -> task::RawWaker {
+			let data = data as *const WakerData;
+			let data = unsafe { data.as_ref() }.expect("Got NULL as waker data");
+
+			// create a new clone to avoid a double-free
+			let clone = Box::leak(Box::new(*data));
+			task::RawWaker::new(clone as *const WakerData as *const (), &WAKER_VTABLE)
+		}
+
+		unsafe fn wake(data: *const ()) {
+			unsafe {
+				wake_by_ref(data);
+				drop(data);
+			}
+		}
+
+		unsafe fn wake_by_ref(data: *const ()) {
+			let data = data as *const WakerData;
+			let data = unsafe { data.as_ref() }.expect("Got NULL as waker data");
+
+			let (queue, id) = data;
+			if let Some(queue) = unsafe { queue.as_ref() } {
+				let mut queue = queue.borrow_mut();
+				queue.push(*id);
+			}
+		}
+
+		unsafe fn drop(data: *const ()) {
+			let data = data as *const WakerData as *mut WakerData;
+			let data = unsafe { data.as_mut() }.expect("Got NULL as waker data");
+
+			unsafe {
+				let data: Box<WakerData> = Box::from_raw(data);
+				mem::drop(data);
+			}
+		}
+
+		let data: WakerData = (&self.queue as *const _, id);
+		let data: &mut WakerData = Box::leak(Box::new(data));
+
+		// simple waker that adds id to vector
+		unsafe { task::Waker::new(data as *const WakerData as *const (), &WAKER_VTABLE) }
 	}
 
+	/// must be called manually to progress execution of tasks and timers
 	fn poll(&mut self) {
-		// poll timers
-		let mut timers = timers::TIMERS.lock().unwrap();
-		let mut zombie_timers = timers::ZOMBIE_TIMERS.lock().unwrap();
+		let mut queue = self.queue.borrow_mut();
 
-		let now = time::Instant::now();
-		let mut idx = None;
+		// swap buffers
+		self.woken.clear();
+		mem::swap(&mut self.woken, &mut queue);
+		mem::drop(queue);
 
-		for (i, (due, ..)) in timers.iter_mut().enumerate() {
-			if now >= *due {
-				let _ = idx.insert(i);
-				break;
-			}
-		}
-
-		if let Some(idx) = idx {
-			for (_, waker_rx) in timers.drain(idx..) {
-				match waker_rx.try_recv() {
-					Ok(waker) => waker.wake(),
-					// timer is due, but hasn't been polled yet
-					Err(oneshot::TryRecvError::Empty) => zombie_timers.push(waker_rx),
-					// timer is due, but was dropped. either dropped itself or dropped prematurely
-					Err(oneshot::TryRecvError::Disconnected) => (),
-				}
-			}
-		}
-
-		// attempt to poll zombie timers
-		let mut old_zombies = Vec::with_capacity(zombie_timers.len());
-		for waker_rx in zombie_timers.drain(..) {
-			match waker_rx.try_recv() {
-				Ok(waker) => waker.wake(),
-				Err(oneshot::TryRecvError::Empty) => old_zombies.push(waker_rx),
-				Err(oneshot::TryRecvError::Disconnected) => (),
-			}
-		}
-
-		zombie_timers.append(&mut old_zombies);
-		drop((zombie_timers, timers)); // release locks
-
-		// poll next task
-		if let Ok(next) = self.task_rx.try_recv() {
+		// poll queued tasks
+		for next in self.woken.drain(..) {
 			if let Some(mut task) = self.tasks.remove(&next) {
 				let fut = task.inner.as_mut();
 				let mut context = task::Context::from_waker(&task.waker);
@@ -130,7 +145,7 @@ impl Runtime {
 						}
 					}
 				}
-			};
+			}
 		}
 	}
 }
