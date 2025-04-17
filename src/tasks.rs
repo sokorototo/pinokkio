@@ -23,7 +23,7 @@ impl<T> Future for TaskMonitor<T> {
 			Ok(v) => task::Poll::Ready(Some(v)),
 			Err(oneshot::TryRecvError::Empty) => {
 				if let Some(tx) = self.waker_tx.take() {
-					if let Err(_) = tx.send(cx.waker().clone()) {
+					if tx.send(cx.waker().clone()).is_err() {
 						return task::Poll::Ready(None);
 					};
 				}

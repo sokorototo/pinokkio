@@ -3,6 +3,7 @@ use super::*;
 use std::{cell, collections, future::Future, mem, task};
 
 /// A minimal single-threaded async runtime
+#[derive(Default)]
 pub struct Runtime {
 	/// Stores tasks to be polled when woken
 	tasks: collections::BTreeMap<usize, tasks::Task>,
@@ -15,6 +16,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
+	/// Instantiate a new Runtime
 	pub fn new() -> Self {
 		let queue = cell::RefCell::new(Vec::new());
 		let woken = Vec::new();
@@ -70,8 +72,8 @@ impl Runtime {
 	}
 
 	fn insert_task(&mut self, id: usize) -> task::Waker {
-		type WakerData = (*const cell::RefCell<Vec<usize>>, usize);
 		static WAKER_VTABLE: task::RawWakerVTable = task::RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+		type WakerData = (*const cell::RefCell<Vec<usize>>, usize);
 
 		unsafe fn clone(data: *const ()) -> task::RawWaker {
 			let data = data as *const WakerData;
@@ -111,7 +113,7 @@ impl Runtime {
 		}
 
 		let data: WakerData = (&self.queue as *const _, id);
-		let data: &mut WakerData = Box::leak(Box::new(data));
+		let data = Box::leak(Box::new(data));
 
 		// simple waker that adds id to vector
 		unsafe { task::Waker::new(data as *const WakerData as *const (), &WAKER_VTABLE) }

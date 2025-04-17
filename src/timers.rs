@@ -74,9 +74,9 @@ pub fn sleep(dur: time::Duration) -> Sleep {
 	let idx = timers.iter().enumerate().find(|(_, (d, ..))| *d < due).map(|(i, ..)| i);
 
 	match idx {
-		Some(i) => timers.insert(i, (due.clone(), waker_rx)),
+		Some(i) => timers.insert(i, (due, waker_rx)),
 		// empty vector, so insert at front
-		None => timers.push((due.clone(), waker_rx)),
+		None => timers.push((due, waker_rx)),
 	}
 
 	Sleep { due, sender: Some(sender) }
@@ -97,12 +97,12 @@ impl Future for Sleep {
 	fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
 		// we've been woken by the runtime, as the oneshot is consumed
 		if self.sender.is_none() {
-			return task::Poll::Ready(self.due.clone());
+			return task::Poll::Ready(self.due);
 		}
 
 		// avoid waking self if due is passed
 		match time::Instant::now() > self.due {
-			true => task::Poll::Ready(self.due.clone()),
+			true => task::Poll::Ready(self.due),
 			false => {
 				// the runtime will wake us when timer is done
 				if let Some(s) = self.sender.take() {
