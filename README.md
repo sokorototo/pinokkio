@@ -48,7 +48,7 @@ Enabled via the `timers` Cargo Feature, `pinokkio` contains an implementation of
 
 Spawns several tasks, each sleeping for a set duration and awaits their combined completion using `futures::join_all`
 
-```rust
+```rust,skip
 let mut rt = pinokkio::rt::Runtime::new();
 
 fn task<R: std::fmt::Display>(id: R) -> impl Future<Output = ()> {
