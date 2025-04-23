@@ -7,7 +7,7 @@ Basically one step above `pollster`, as it allows spawning tasks _and_ blocking 
 ```rust
 let fut = async { 42 };
 
-let mut rt = rt::Runtime::new();
+let mut rt = pinokkio::rt::Runtime::new();
 let result = rt.block_on(fut);
 
 assert_eq!(result, 42);
@@ -30,7 +30,7 @@ let fut_60 = async {
    }
 };
 
-let mut rt = rt::Runtime::new();
+let mut rt = pinokkio::rt::Runtime::new();
 let monitor = rt.spawn(fut_60);
 
 rt.block_on(monitor);
@@ -49,15 +49,15 @@ Enabled via the `timers` Cargo Feature, `pinokkio` contains an implementation of
 Spawns several tasks, each sleeping for a set duration and awaits their combined completion using `futures::join_all`
 
 ```rust
-let mut rt = rt::Runtime::new();
+let mut rt = pinokkio::rt::Runtime::new();
 
-fn task<R: fmt::Display>(id: R) -> impl Future<Output = ()> {
+fn task<R: std::fmt::Display>(id: R) -> impl Future<Output = ()> {
    async move {
       println!("[{}] Sleeping for 5s", id);
 
       for i in 0..5 {
          println!("[{}]: {}s left", id, 5 - i);
-         sleep(time::Duration::from_secs(1)).await;
+         pinokkio::timers::sleep(time::Duration::from_secs(1)).await;
       }
 
       println!("[{}] Done sleeping", id);
@@ -65,7 +65,7 @@ fn task<R: fmt::Display>(id: R) -> impl Future<Output = ()> {
 }
 
 // initialize Sleep subroutine
-rt.spawn(timers::SleepSubroutine);
+rt.spawn(pinokkio::timers::SleepSubroutine);
 
 let tasks = (0..5).map(|id| rt.spawn(task(id)));
 let join = futures::future::join_all(tasks);
