@@ -1,6 +1,6 @@
 ## `pinokkio`: A minimal, single-threaded async runtime.
 
-Basically one step above `pollster`, as it allows spawning tasks _and_ blocking the current thread. Currently for purely educational purposes. Only depends on `oneshot`, which in itself depends on nothing else, `oneshot` makes my life so much easier. wasm-bindgen compatibility is WIP.
+Basically one step above `pollster`, as it allows spawning tasks _and_ blocking the current thread. Currently for purely educational purposes. Only depends on `oneshot`. `wasm-bindgen` compatibility is WIP.
 
 ### 🧪 Sample Usage:
 
@@ -43,8 +43,6 @@ Enabled via the `timers` Cargo Feature, `pinokkio` contains an implementation of
    - Sleep futures don't poll themselves. They immediately return if already due, acting like a simple `futures::yield_now`.
  - Cons:
    - Having state managed externally by `SleepSubroutine` means dropping the `Sleep` future before it's due results in a zombie timer. This is memory that is managed but never freed.
-
----
 
 Spawns several tasks, each sleeping for a set duration and awaits their combined completion using `futures::join_all`
 

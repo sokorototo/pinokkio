@@ -1,5 +1,4 @@
 use super::*;
-
 use std::{cell, collections, future::Future, mem, task};
 
 /// A minimal single-threaded async runtime
