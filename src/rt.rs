@@ -74,6 +74,7 @@ impl Runtime {
 		static WAKER_VTABLE: task::RawWakerVTable = task::RawWakerVTable::new(clone, wake, wake_by_ref, drop);
 		type WakerData = (*const cell::RefCell<Vec<usize>>, usize);
 
+		// quartet of waker methods
 		unsafe fn clone(data: *const ()) -> task::RawWaker {
 			let data = data as *const WakerData;
 			let data = unsafe { data.as_ref() }.expect("Got NULL as waker data");
