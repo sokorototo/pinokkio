@@ -1,10 +1,37 @@
-use std::{future::Future, pin::Pin, sync, task, time};
+use std::{collections, future::Future, pin::Pin, sync, task, time};
 
 /// Timers yet overdue, dropping the future clears the timer
-pub static TIMERS: sync::Mutex<Vec<(time::Instant, oneshot::Receiver<task::Waker>)>> = sync::Mutex::new(Vec::new());
+static TIMERS: sync::Mutex<collections::BinaryHeap<TimerTracker>> = sync::Mutex::new(collections::BinaryHeap::new());
 
 /// Timers that are overdue, but haven't been polled yet. Thus no waker is available
-pub(crate) static ZOMBIE_TIMERS: sync::Mutex<Vec<oneshot::Receiver<task::Waker>>> = sync::Mutex::new(Vec::new());
+static ZOMBIE_TIMERS: sync::Mutex<Vec<oneshot::Receiver<task::Waker>>> = sync::Mutex::new(Vec::new());
+
+/// Keeps track of when a timer is due, as well as a waker to poll the adjacent future.
+#[derive(Debug)]
+struct TimerTracker {
+	due: time::Instant,
+	waker_rx: oneshot::Receiver<task::Waker>,
+}
+
+impl PartialEq for TimerTracker {
+	fn eq(&self, other: &Self) -> bool {
+		self.due == other.due
+	}
+}
+
+impl Eq for TimerTracker {}
+
+impl PartialOrd for TimerTracker {
+	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+		other.due.partial_cmp(&self.due)
+	}
+}
+
+impl Ord for TimerTracker {
+	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+		other.due.cmp(&self.due)
+	}
+}
 
 /// Long running future that progresses execution of [`Sleep`] futures, must be spawned for [`Sleep`] to work
 pub struct SleepSubroutine;
@@ -15,52 +42,40 @@ impl Future for SleepSubroutine {
 	type Output = ();
 
 	fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-		poll();
-		cx.waker().wake_by_ref();
+		let mut timers = TIMERS.lock().unwrap();
+		let mut zombie_timers = ZOMBIE_TIMERS.lock().unwrap();
 
-		task::Poll::Pending
-	}
-}
+		let now = time::Instant::now();
 
-/// Actually progresses the execution of stored futures
-pub(crate) fn poll() {
-	let mut timers = TIMERS.lock().unwrap();
-	let mut zombie_timers = ZOMBIE_TIMERS.lock().unwrap();
-
-	let now = time::Instant::now();
-	let mut cutoff = None;
-
-	for (i, (due, ..)) in timers.iter_mut().enumerate() {
-		if now >= *due {
-			cutoff = Some(i);
-			break;
+		// pop due timers from queue
+		while timers.peek().map(|t| t.due <= now).unwrap_or(false) {
+			if let Some(TimerTracker { waker_rx, .. }) = timers.pop() {
+				match waker_rx.try_recv() {
+					Ok(waker) => waker.wake(),
+					// timer is due, but hasn't been polled yet
+					Err(oneshot::TryRecvError::Empty) => zombie_timers.push(waker_rx),
+					// timer is due, but was dropped. either dropped itself or dropped prematurely
+					Err(oneshot::TryRecvError::Disconnected) => (),
+				}
+			}
 		}
-	}
 
-	if let Some(idx) = cutoff {
-		for (_, waker_rx) in timers.drain(idx..) {
+		// attempt to poll zombie timers
+		let mut old_zombies = Vec::with_capacity(zombie_timers.len());
+		for waker_rx in zombie_timers.drain(..) {
 			match waker_rx.try_recv() {
 				Ok(waker) => waker.wake(),
-				// timer is due, but hasn't been polled yet
-				Err(oneshot::TryRecvError::Empty) => zombie_timers.push(waker_rx),
-				// timer is due, but was dropped. either dropped itself or dropped prematurely
+				Err(oneshot::TryRecvError::Empty) => old_zombies.push(waker_rx),
 				Err(oneshot::TryRecvError::Disconnected) => (),
 			}
 		}
-	}
 
-	// attempt to poll zombie timers
-	let mut old_zombies = Vec::with_capacity(zombie_timers.len());
-	for waker_rx in zombie_timers.drain(..) {
-		match waker_rx.try_recv() {
-			Ok(waker) => waker.wake(),
-			Err(oneshot::TryRecvError::Empty) => old_zombies.push(waker_rx),
-			Err(oneshot::TryRecvError::Disconnected) => (),
-		}
-	}
+		zombie_timers.append(&mut old_zombies);
+		drop((zombie_timers, timers)); // release locks
 
-	zombie_timers.append(&mut old_zombies);
-	drop((zombie_timers, timers)); // release locks
+		cx.waker().wake_by_ref();
+		task::Poll::Pending
+	}
 }
 
 /// Creates a new [`Sleep`] future
@@ -71,14 +86,7 @@ pub fn sleep(dur: time::Duration) -> Sleep {
 	let mut timers = TIMERS.lock().unwrap();
 
 	// sorted by due time in descending order
-	let idx = timers.iter().enumerate().find(|(_, (d, ..))| *d < due).map(|(i, ..)| i);
-
-	match idx {
-		Some(i) => timers.insert(i, (due, waker_rx)),
-		// empty vector, so insert at front
-		None => timers.push((due, waker_rx)),
-	}
-
+	timers.push(TimerTracker { due, waker_rx });
 	Sleep { due, sender: Some(sender) }
 }
 
