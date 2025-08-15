@@ -1,6 +1,6 @@
 ## `pinokkio`: A minimal, single-threaded async runtime.
 
-Basically one step above `pollster`, as it allows spawning tasks _and_ blocking the current thread. Currently for purely educational purposes. Only depends on `oneshot`. `wasm-bindgen` compatibility is WIP.
+Basically one step above `pollster`, as it allows spawning tasks _and_ blocking the current thread. Currently for purely educational purposes. `wasm-bindgen` compatibility is WIP.
 
 ### 🧪 Sample Usage:
 

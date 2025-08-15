@@ -33,7 +33,10 @@ impl Runtime {
 
 		let inner = Box::pin(async move {
 			let res = fut.await;
-			results_tx.send(res).unwrap();
+
+			if let Err(_) = results_tx.send(res) {
+				panic!("Unable to send results for completed task: {}", task_id)
+			};
 		});
 
 		self.tasks.insert(task_id, tasks::Task { inner, waker, monitor_waker: None });
@@ -61,7 +64,10 @@ impl Runtime {
 
 		let inner = Box::pin(async move {
 			let res = fut.await;
-			result_tx.send(res).unwrap();
+
+			if let Err(_) = result_tx.send(res) {
+				panic!("Unable to send results for completed task: {}", task_id)
+			};
 		});
 
 		let task = tasks::Task { inner, waker, monitor_waker: Some(waker_rx) };

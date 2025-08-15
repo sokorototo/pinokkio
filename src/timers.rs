@@ -1,13 +1,15 @@
-use std::{collections, future::Future, pin::Pin, sync, task, time};
+use crate::oneshot;
+use std::{cell, collections, future::Future, pin::Pin, task, time};
 
-/// Timers yet overdue, dropping the future clears the timer
-static TIMERS: sync::Mutex<collections::BinaryHeap<TimerTracker>> = sync::Mutex::new(collections::BinaryHeap::new());
+thread_local! {
+	/// Timers yet overdue, dropping the future clears the timer
+	static TIMERS: cell::RefCell<collections::BinaryHeap<TimerTracker>> = cell::RefCell::new(collections::BinaryHeap::new());
 
-/// Timers that are overdue, but haven't been polled yet. Thus no waker is available
-static ZOMBIE_TIMERS: sync::Mutex<Vec<oneshot::Receiver<task::Waker>>> = sync::Mutex::new(Vec::new());
+	/// Timers that are overdue, but haven't been polled yet. Thus no waker is available
+	static ZOMBIE_TIMERS: cell::RefCell<Vec<oneshot::Receiver<task::Waker>>> = cell::RefCell::new(Vec::new());
+}
 
 /// Keeps track of when a timer is due, as well as a waker to poll the adjacent future.
-#[derive(Debug)]
 struct TimerTracker {
 	due: time::Instant,
 	waker_rx: oneshot::Receiver<task::Waker>,
@@ -42,36 +44,36 @@ impl Future for SleepSubroutine {
 	type Output = ();
 
 	fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-		let mut timers = TIMERS.lock().unwrap();
-		let mut zombie_timers = ZOMBIE_TIMERS.lock().unwrap();
+		TIMERS.with_borrow_mut(|timers| {
+			ZOMBIE_TIMERS.with_borrow_mut(|zombie_timers| {
+				let now = time::Instant::now();
 
-		let now = time::Instant::now();
-
-		// pop due timers from queue
-		while timers.peek().map(|t| t.due <= now).unwrap_or(false) {
-			if let Some(TimerTracker { waker_rx, .. }) = timers.pop() {
-				match waker_rx.try_recv() {
-					Ok(waker) => waker.wake(),
-					// timer is due, but hasn't been polled yet
-					Err(oneshot::TryRecvError::Empty) => zombie_timers.push(waker_rx),
-					// timer is due, but was dropped. either dropped itself or dropped prematurely
-					Err(oneshot::TryRecvError::Disconnected) => (),
+				// pop due timers from queue
+				while timers.peek().map(|t| t.due <= now).unwrap_or(false) {
+					if let Some(TimerTracker { waker_rx, .. }) = timers.pop() {
+						match waker_rx.try_recv() {
+							Ok(waker) => waker.wake(),
+							// timer is due, but hasn't been polled yet
+							Err(oneshot::TryRecvError::Empty) => zombie_timers.push(waker_rx),
+							// timer is due, but was dropped. either dropped itself or dropped prematurely
+							Err(oneshot::TryRecvError::Disconnected) => (),
+						}
+					}
 				}
-			}
-		}
 
-		// attempt to poll zombie timers
-		let mut old_zombies = Vec::with_capacity(zombie_timers.len());
-		for waker_rx in zombie_timers.drain(..) {
-			match waker_rx.try_recv() {
-				Ok(waker) => waker.wake(),
-				Err(oneshot::TryRecvError::Empty) => old_zombies.push(waker_rx),
-				Err(oneshot::TryRecvError::Disconnected) => (),
-			}
-		}
+				// attempt to poll zombie timers
+				let mut old_zombies = Vec::with_capacity(zombie_timers.len());
+				for waker_rx in zombie_timers.drain(..) {
+					match waker_rx.try_recv() {
+						Ok(waker) => waker.wake(),
+						Err(oneshot::TryRecvError::Empty) => old_zombies.push(waker_rx),
+						Err(oneshot::TryRecvError::Disconnected) => (),
+					}
+				}
 
-		zombie_timers.append(&mut old_zombies);
-		drop((zombie_timers, timers)); // release locks
+				zombie_timers.append(&mut old_zombies);
+			});
+		});
 
 		cx.waker().wake_by_ref();
 		task::Poll::Pending
@@ -83,10 +85,8 @@ pub fn sleep(dur: time::Duration) -> Sleep {
 	let due = time::Instant::now() + dur;
 
 	let (sender, waker_rx) = oneshot::channel();
-	let mut timers = TIMERS.lock().unwrap();
+	TIMERS.with_borrow_mut(|t| t.push(TimerTracker { due, waker_rx }));
 
-	// sorted by due time in descending order
-	timers.push(TimerTracker { due, waker_rx });
 	Sleep { due, sender: Some(sender) }
 }
 

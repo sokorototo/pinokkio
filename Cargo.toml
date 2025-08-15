@@ -6,9 +6,6 @@ edition = "2024"
 [lib]
 doctest = false
 
-[dependencies]
-oneshot = { version = "0.1", default-features = false }
-
 [features]
 timers = []
 
