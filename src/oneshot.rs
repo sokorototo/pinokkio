@@ -1,50 +1,57 @@
-use std::{fmt, mem, ptr};
+use std::{fmt, mem};
 
 pub(crate) fn channel<T>() -> (Sender<T>, Receiver<T>) {
-	let data: T = unsafe { mem::zeroed() };
-	let bus = Box::into_raw(Box::new(data));
 	let status = Box::into_raw(Box::new(ChannelStatus::Pending));
 
-	let sender = Sender { status, bus };
-	let receiver = Receiver { status, bus };
+	let sender = Sender { status };
+	let receiver = Receiver { status };
 
 	(sender, receiver)
 }
 
-#[derive(Debug)]
 #[repr(u8)]
 /// The status of a channel
-pub(crate) enum ChannelStatus {
+pub(crate) enum ChannelStatus<T> {
 	/// [`Sender`] is pending to send messages
 	Pending,
 	/// Either [`Sender`] or [`Receiver`] has been dropped, without a message passing
 	Closed,
 	/// A message has been currently sent by the [`Sender`]
-	Active,
+	Active(T),
+	/// A message was written to, and consumed from this channel
+	Consumed,
+}
+
+impl<T> fmt::Debug for ChannelStatus<T> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Pending => write!(f, "Pending"),
+			Self::Closed => write!(f, "Closed"),
+			Self::Active(..) => f.debug_tuple("Active").field(&"[packet]").finish(),
+			Self::Consumed => write!(f, "Consumed"),
+		}
+	}
 }
 
 pub(crate) struct Sender<T> {
-	status: *mut ChannelStatus,
-	bus: *mut T,
+	status: *mut ChannelStatus<T>,
 }
 
 impl<T> Sender<T> {
 	/// If `Some(T)` then the receiver was closed, [`None`] is the success path
 	pub(crate) fn send(self, data: T) -> Result<(), T> {
 		let status = unsafe { self.status.as_mut().unwrap() };
-		let bus = unsafe { self.bus.as_mut().unwrap() };
 
 		// attempt to write data to pointer
 		match status {
 			ChannelStatus::Pending => {
 				// set status to active
-				*status = ChannelStatus::Active;
-				*bus = data;
+				*status = ChannelStatus::Active(data);
 			}
 			// receiver was closed
 			ChannelStatus::Closed => return Err(data),
 			// double send?
-			ChannelStatus::Active => panic!("Double Send on oneshot channel"),
+			ChannelStatus::Consumed | ChannelStatus::Active(..) => panic!("Double Send on oneshot channel"),
 		};
 
 		Ok(())
@@ -59,31 +66,32 @@ impl<T> Drop for Sender<T> {
 			// sender dropped without sending a message
 			ChannelStatus::Pending => *status = ChannelStatus::Closed,
 			// message already sent, or receiver dropped
-			ChannelStatus::Active | ChannelStatus::Closed => {}
+			ChannelStatus::Consumed | ChannelStatus::Active(..) | ChannelStatus::Closed => {}
 		}
 	}
 }
 
 pub(crate) struct Receiver<T> {
-	status: *mut ChannelStatus,
-	bus: *mut T,
+	status: *mut ChannelStatus<T>,
 }
 
 impl<T> Receiver<T> {
 	pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
-		let status = unsafe { self.status.as_ref().unwrap() };
+		let status = unsafe { self.status.as_mut().unwrap() };
 
 		match status {
-			ChannelStatus::Active => Ok(unsafe { ptr::read(self.bus) }),
+			ChannelStatus::Active(..) => {
+				let ChannelStatus::Active(data) = mem::replace(status, ChannelStatus::Consumed) else { unreachable!() };
+				Ok(data)
+			}
 			ChannelStatus::Pending => Err(TryRecvError::Empty),
-			ChannelStatus::Closed => Err(TryRecvError::Disconnected),
+			ChannelStatus::Consumed | ChannelStatus::Closed => Err(TryRecvError::Disconnected),
 		}
 	}
 }
 
 impl<T> Drop for Receiver<T> {
 	fn drop(&mut self) {
-		let _ = unsafe { Box::from_raw(self.bus) };
 		let _ = unsafe { Box::from_raw(self.status) };
 
 		// update status
@@ -93,7 +101,7 @@ impl<T> Drop for Receiver<T> {
 			// receiver dropped without receiving a message
 			ChannelStatus::Pending => *status = ChannelStatus::Closed,
 			// message already sent, or sender dropped
-			ChannelStatus::Active | ChannelStatus::Closed => {}
+			ChannelStatus::Consumed | ChannelStatus::Active(..) | ChannelStatus::Closed => {}
 		}
 	}
 }
