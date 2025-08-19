@@ -129,32 +129,32 @@ impl Runtime {
 
 	/// must be called manually to progress execution of tasks and timers
 	fn poll(&mut self) {
-		let mut queue = self.queue.borrow_mut();
-
 		// swap buffers
-		self.woken.clear();
+		let mut queue = self.queue.borrow_mut();
 		mem::swap(&mut self.woken, &mut queue);
 		mem::drop(queue);
 
 		// poll queued tasks
 		for next in self.woken.drain(..) {
-			if let Some(mut task) = self.tasks.remove(&next) {
+			let mut remove = false;
+
+			if let Some(task) = self.tasks.get_mut(&next) {
 				let fut = task.inner.as_mut();
 				let mut context = task::Context::from_waker(&task.waker);
 
-				match fut.poll(&mut context) {
-					task::Poll::Pending => {
-						self.tasks.insert(next, task);
-					}
-					// attempt to wake-up monitor
-					task::Poll::Ready(_) => {
-						if let Some(waker_rx) = task.monitor_waker.take() {
-							if let Ok(waker) = waker_rx.try_recv() {
-								waker.wake()
-							}
+				if let task::Poll::Ready(_) = fut.poll(&mut context) {
+					if let Some(waker_rx) = task.monitor_waker.take() {
+						if let Ok(waker) = waker_rx.try_recv() {
+							waker.wake()
 						}
 					}
+
+					remove = true;
 				}
+			}
+
+			if remove {
+				self.tasks.remove(&next);
 			}
 		}
 	}
