@@ -1,5 +1,7 @@
 use crate::oneshot;
-use std::{future::Future, pin::Pin, task};
+
+use alloc::boxed::Box;
+use core::{future::Future, pin::Pin, task};
 
 /// A long running future, results can be polled using [`TaskMonitor`]
 pub struct Task {

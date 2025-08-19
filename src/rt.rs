@@ -1,5 +1,7 @@
 use super::*;
-use std::{cell, collections, future::Future, mem, task};
+
+use alloc::{boxed::Box, collections, vec::Vec};
+use core::{cell, future::Future, mem, task};
 
 /// A minimal single-threaded async runtime
 #[derive(Default)]
@@ -47,7 +49,7 @@ impl Runtime {
 			match results_rx.try_recv() {
 				Ok(r) => return r,
 				Err(oneshot::TryRecvError::Empty) => {}
-				Err(oneshot::TryRecvError::Disconnected) => panic!("Task was dropped during execution"),
+				Err(oneshot::TryRecvError::Disconnected) => unreachable!("Task was dropped during execution"),
 			}
 		}
 	}

@@ -1,4 +1,5 @@
-use std::{fmt, mem};
+use alloc::boxed::Box;
+use core::{fmt, mem};
 
 pub(crate) fn channel<T>() -> (Sender<T>, Receiver<T>) {
 	let status = Box::into_raw(Box::new(ChannelStatus::Pending));
@@ -51,7 +52,7 @@ impl<T> Sender<T> {
 			// receiver was closed
 			ChannelStatus::Closed => return Err(data),
 			// double send?
-			ChannelStatus::Consumed | ChannelStatus::Active(..) => panic!("Double Send on oneshot channel"),
+			ChannelStatus::Consumed | ChannelStatus::Active(..) => unreachable!("Double Send on oneshot channel"),
 		};
 
 		Ok(())
