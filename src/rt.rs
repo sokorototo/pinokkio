@@ -30,7 +30,7 @@ impl Runtime {
 		let task_id = self.tasks.len();
 		let (results_tx, results_rx) = oneshot::channel();
 
-		let waker = self.insert_task(task_id);
+		let waker = self.create_waker(task_id);
 		waker.wake_by_ref(); // poll once
 
 		let inner = Box::pin(async move {
@@ -61,7 +61,7 @@ impl Runtime {
 		let (waker_tx, waker_rx) = oneshot::channel();
 
 		// poll once, and initialize task
-		let waker = self.insert_task(task_id);
+		let waker = self.create_waker(task_id);
 		waker.wake_by_ref();
 
 		let inner = Box::pin(async move {
@@ -78,7 +78,7 @@ impl Runtime {
 		tasks::TaskMonitor { result_rx, waker_tx: Some(waker_tx) }
 	}
 
-	fn insert_task(&mut self, id: usize) -> task::Waker {
+	fn create_waker(&mut self, id: usize) -> task::Waker {
 		static WAKER_VTABLE: task::RawWakerVTable = task::RawWakerVTable::new(clone, wake, wake_by_ref, drop);
 		type WakerData = (*const cell::RefCell<Vec<usize>>, usize);
 
@@ -127,7 +127,7 @@ impl Runtime {
 		unsafe { task::Waker::new(data as *const WakerData as *const (), &WAKER_VTABLE) }
 	}
 
-	/// must be called manually to progress execution of tasks and timers
+	/// must be called manually to progress execution of tasks
 	fn poll(&mut self) {
 		// swap buffers
 		let mut queue = self.queue.borrow_mut();
@@ -149,6 +149,7 @@ impl Runtime {
 						}
 					}
 
+					// mark task for removal
 					remove = true;
 				}
 			}
