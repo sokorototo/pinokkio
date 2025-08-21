@@ -116,3 +116,41 @@ fn green_threads() {
 	let results = rt.block_on(join);
 	assert!(results.len() == 5);
 }
+
+#[test]
+#[cfg(feature = "timers")]
+fn green_threads_wait() {
+	let mut rt = rt::Runtime::new();
+	// initialize Sleep subroutine
+	rt.spawn(timers::SleepSubroutine);
+
+	// start sleeping task
+	let (tx, rx) = futures::channel::oneshot::channel::<()>();
+
+	let sleeping = async move {
+		let id = "sleeping";
+		let num_secs = 5;
+
+		println!("[{}] Sleeping for {}s", id, num_secs);
+		for i in 0..num_secs {
+			println!("[{}]: {}s left", id, num_secs - i);
+			sleep(time::Duration::from_secs(1)).await;
+		}
+
+		println!("[{}] Done sleeping", id);
+		tx.send(()).unwrap();
+	};
+
+	// start awaiting task
+	let awaiting = async move {
+		let id = "awaiting";
+		println!("[{}] Waiting for [{}]", id, "sleeping");
+
+		rx.await.unwrap();
+		println!("[{}] Done waiting", id);
+	};
+
+	let join = futures::future::join_all([rt.spawn(sleeping), rt.spawn(awaiting)]);
+	let results = rt.block_on(join);
+	assert!(results.len() == 2);
+}
