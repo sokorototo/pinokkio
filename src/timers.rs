@@ -91,7 +91,6 @@ impl Future for SleepSubroutine {
 
 		if zombies != 0 {
 			// busy loop, waiting for any zombies to resurrect
-			println!("Zombie Timers = {}", zombies);
 			cx.waker().wake_by_ref()
 		} else {
 			// if we have any timers pending, sleep and wake task
