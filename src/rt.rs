@@ -44,6 +44,7 @@ impl Runtime {
 		self.tasks.insert(task_id, tasks::Task { inner, waker, monitor_waker: None });
 
 		loop {
+			// TODO: Learn about thread parking, to reduce CPU overhead
 			self.poll();
 
 			match results_rx.try_recv() {

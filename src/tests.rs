@@ -129,7 +129,7 @@ fn green_threads_wait() {
 
 	let sleeping = async move {
 		let id = "sleeping";
-		let num_secs = 5;
+		let num_secs = 500;
 
 		println!("[{}] Sleeping for {}s", id, num_secs);
 		for i in 0..num_secs {

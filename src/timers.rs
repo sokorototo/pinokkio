@@ -1,7 +1,12 @@
+// TODO: wasm compatibility: wasm-time and set_timeout instead of sleep
+
 use crate::oneshot;
-use std::{cell, collections, future::Future, pin::Pin, task, time};
+use std::{cell, collections, future::Future, pin::Pin, task, thread, time};
 
 thread_local! {
+	/// Waker used to wake timer subroutine when no sleep tasks are currently pending
+	static WAKER: cell::RefCell<Option<task::Waker>> = cell::RefCell::new(None);
+
 	/// Timers yet overdue, dropping the future clears the timer
 	static TIMERS: cell::RefCell<collections::BinaryHeap<TimerTracker>> = cell::RefCell::new(collections::BinaryHeap::new());
 
@@ -44,8 +49,14 @@ impl Future for SleepSubroutine {
 	type Output = ();
 
 	fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-		TIMERS.with_borrow_mut(|timers| {
-			ZOMBIE_TIMERS.with_borrow_mut(|zombie_timers| {
+		// init waker if not initialized
+		WAKER.with_borrow_mut(|w| {
+			w.get_or_insert(cx.waker().clone());
+		});
+
+		// do our job as a sleep subroutine
+		let (zombies, earliest) = TIMERS.with_borrow_mut(|timers| {
+			let zombies = ZOMBIE_TIMERS.with_borrow_mut(|zombie_timers| {
 				let now = time::Instant::now();
 
 				// pop due timers from queue
@@ -72,10 +83,24 @@ impl Future for SleepSubroutine {
 				}
 
 				zombie_timers.append(&mut old_zombies);
+				zombie_timers.len()
 			});
+
+			(zombies, timers.peek().map(|t| t.due.clone()))
 		});
 
-		cx.waker().wake_by_ref();
+		if zombies != 0 {
+			// busy loop, waiting for any zombies to resurrect
+			println!("Zombie Timers = {}", zombies);
+			cx.waker().wake_by_ref()
+		} else {
+			// if we have any timers pending, sleep and wake task
+			if let Some(e) = earliest {
+				thread::sleep(e - time::Instant::now());
+				cx.waker().wake_by_ref()
+			}
+		}
+
 		task::Poll::Pending
 	}
 }
@@ -85,7 +110,9 @@ pub fn sleep(dur: time::Duration) -> Sleep {
 	let due = time::Instant::now() + dur;
 
 	let (sender, waker_rx) = oneshot::channel();
+
 	TIMERS.with_borrow_mut(|t| t.push(TimerTracker { due, waker_rx }));
+	WAKER.with_borrow(|w| w.as_ref().map(|w| w.wake_by_ref()));
 
 	Sleep { due, sender: Some(sender) }
 }
