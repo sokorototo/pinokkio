@@ -10,7 +10,7 @@ mod tests;
 
 /// [`Runtime`](rt::Runtime) implementation
 pub mod rt;
-/// [`Tasks`](tasks::Task) and [`TaskMonitor`](tasks::TaskMonitor) (Join Handles) implementation
+/// [`TaskMonitor`](tasks::TaskMonitor) implementation
 pub mod tasks;
 
 /// Lazy Timers implementation, focused on reducing self wake-ups

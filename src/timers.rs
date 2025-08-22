@@ -1,7 +1,7 @@
 // TODO: wasm compatibility: wasm-time and set_timeout instead of sleep
 
 use crate::oneshot;
-use std::{cell, collections, future::Future, pin::Pin, task, thread, time};
+use std::{cell, collections, future::Future, marker, pin::Pin, task, thread, time};
 
 thread_local! {
 	/// Waker used to wake timer subroutine when no sleep tasks are currently pending
@@ -113,14 +113,15 @@ pub fn sleep(dur: time::Duration) -> Sleep {
 	TIMERS.with_borrow_mut(|t| t.push(TimerTracker { due, waker_rx }));
 	WAKER.with_borrow(|w| w.as_ref().map(|w| w.wake_by_ref()));
 
-	Sleep { due, sender: Some(sender) }
+	Sleep { due, sender: Some(sender), _marker: marker::PhantomData }
 }
 
-/// A sleeping future that doesn't poll itself, but [`poll`] must be called to progress execution.
+/// A sleeping future that doesn't poll itself, [`SleepSubroutine`] must be polled to progress execution.
 /// Immediately returns if `due` has already passed during the time of invocation.
 pub struct Sleep {
 	pub(crate) due: time::Instant,
 	pub(crate) sender: Option<oneshot::Sender<task::Waker>>,
+	pub(crate) _marker: marker::PhantomData<*mut u8>,
 }
 
 impl Unpin for Sleep {}

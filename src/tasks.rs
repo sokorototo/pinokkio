@@ -4,13 +4,13 @@ use alloc::boxed::Box;
 use core::{future::Future, pin::Pin, task};
 
 /// A long running future, results can be polled using [`TaskMonitor`]
-pub struct Task {
+pub(crate) struct Task {
 	pub(crate) inner: Pin<Box<dyn Future<Output = ()>>>,
 	pub(crate) waker: task::Waker,
 	pub(crate) monitor_waker: Option<oneshot::Receiver<task::Waker>>,
 }
 
-/// Future that stays pending until [`Task`] completes
+/// Future that stays pending until [`Task`](crate::rt::Runtime::spawn) completes
 pub struct TaskMonitor<T> {
 	pub(crate) result_rx: oneshot::Receiver<T>,
 	pub(crate) waker_tx: Option<oneshot::Sender<task::Waker>>,

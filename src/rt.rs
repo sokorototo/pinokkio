@@ -55,7 +55,7 @@ impl Runtime {
 		}
 	}
 
-	/// Spawns a future as a [`Task`](tasks::Task), and returns a [`TaskMonitor`](tasks::TaskMonitor)
+	/// Spawns a future as a `Task`, and returns a [`TaskMonitor`](tasks::TaskMonitor)
 	pub fn spawn<T: 'static, F: Future<Output = T> + 'static>(&mut self, fut: F) -> tasks::TaskMonitor<T> {
 		let task_id = self.tasks.len();
 		let (result_tx, result_rx) = oneshot::channel();
