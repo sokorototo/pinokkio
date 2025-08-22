@@ -1,5 +1,6 @@
 [package]
 name = "pinokkio"
+description = "Minimal async runtime optimized for running NPC logic as minimal async subroutines"
 version = "0.1.0"
 edition = "2024"
 
