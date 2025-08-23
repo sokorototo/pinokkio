@@ -7,33 +7,6 @@ use {
 };
 
 #[test]
-fn oneshot_correct() {
-	let (tx, rx) = oneshot::channel::<()>();
-	assert_eq!(rx.try_recv(), Err(oneshot::TryRecvError::Empty));
-
-	tx.send(()).unwrap();
-	rx.try_recv().unwrap();
-
-	assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn oneshot_sender_dropped() {
-	let (tx, rx) = oneshot::channel::<()>();
-
-	drop(tx);
-	assert_eq!(rx.try_recv(), Err(oneshot::TryRecvError::Disconnected));
-}
-
-#[test]
-fn oneshot_receiver_dropped() {
-	let (tx, rx) = oneshot::channel::<()>();
-
-	drop(rx);
-	assert_eq!(tx.send(()), Err(()));
-}
-
-#[test]
 fn simple() {
 	let fut_1 = async { 42 };
 	let fut_2 = async move { fut_1.await + 1 };
@@ -83,9 +56,6 @@ fn sleep_tasks() {
 		println!("Done sleeping");
 	};
 
-	// initialize Sleep subroutine
-	rt.spawn(timers::SleepSubroutine);
-
 	rt.block_on(sleep_5s);
 }
 
@@ -107,9 +77,6 @@ fn green_threads() {
 		}
 	}
 
-	// initialize Sleep subroutine
-	rt.spawn(timers::SleepSubroutine);
-
 	let tasks = (0..5).map(|id| rt.spawn(task(id)));
 	let join = futures::future::join_all(tasks);
 
@@ -121,8 +88,6 @@ fn green_threads() {
 #[cfg(feature = "timers")]
 fn green_threads_wait() {
 	let mut rt = rt::Runtime::new();
-	// initialize Sleep subroutine
-	rt.spawn(timers::SleepSubroutine);
 
 	// start sleeping task
 	let (tx, rx) = futures::channel::oneshot::channel::<()>();

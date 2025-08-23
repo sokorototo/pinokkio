@@ -1,17 +1,67 @@
-// TODO: wasm compatibility: wasm-time and set_timeout instead of sleep
-
-use crate::oneshot;
-use std::{cell, collections, future::Future, marker, pin::Pin, task, thread, time};
+use std::{cell, collections, future::Future, marker, pin::Pin, sync::mpsc, task, thread, time};
 
 thread_local! {
-	/// Waker used to wake timer subroutine when no sleep tasks are currently pending
-	static WAKER: cell::RefCell<Option<task::Waker>> = cell::RefCell::new(None);
+	/// Used by `sleep` to queue new timer futures. If a queue exists, then the thread-id of the sleeping thread is known
+	static SLEEPING_THREAD: cell::RefCell<Option<(thread::Thread, mpsc::Sender<TimerTracker>)>> = cell::RefCell::new(None);
+}
 
-	/// Timers yet overdue, dropping the future clears the timer
-	static TIMERS: cell::RefCell<collections::BinaryHeap<TimerTracker>> = cell::RefCell::new(collections::BinaryHeap::new());
+/// Spawns a dedicated lightweight sleeping thread for OS preemption of sleeping futures
+pub fn init() {
+	SLEEPING_THREAD.with_borrow_mut(|queue| {
+		if let None = queue {
+			// init sleeping thread and current thread state
+			let (sender, receiver) = mpsc::channel::<TimerTracker>();
 
-	/// Timers that are overdue, but haven't been polled yet. Thus no waker is available
-	static ZOMBIE_TIMERS: cell::RefCell<Vec<oneshot::Receiver<task::Waker>>> = cell::RefCell::new(Vec::new());
+			// start sleeping thread
+			let sleeper = thread::spawn(move || {
+				let mut timers = collections::BinaryHeap::<TimerTracker>::new();
+				// Timers that are overdue, but haven't been polled yet. Thus no waker is available
+				let mut zombie_timers = Vec::new();
+
+				loop {
+					let now = time::Instant::now();
+
+					// insert new timer futures
+					timers.extend(receiver.try_iter());
+
+					// pop due overdue timers from queue
+					while timers.peek().map(|t| t.due <= now).unwrap_or(false) {
+						if let Some(TimerTracker { waker_rx, .. }) = timers.pop() {
+							match waker_rx.try_recv() {
+								Ok(waker) => waker.wake(),
+								// timer is due, but hasn't been polled yet
+								Err(oneshot::TryRecvError::Empty) => zombie_timers.push(waker_rx),
+								// timer is due, but was dropped. either dropped itself or dropped prematurely
+								Err(oneshot::TryRecvError::Disconnected) => (),
+							}
+						}
+					}
+
+					// attempt to poll zombie timers
+					let mut old_zombies = Vec::with_capacity(zombie_timers.len());
+					for waker_rx in zombie_timers.drain(..) {
+						match waker_rx.try_recv() {
+							Ok(waker) => waker.wake(),
+							Err(oneshot::TryRecvError::Empty) => old_zombies.push(waker_rx),
+							Err(oneshot::TryRecvError::Disconnected) => (),
+						}
+					}
+
+					zombie_timers.append(&mut old_zombies);
+
+					// if we have any timers pending, sleep and wake task
+					if let Some(e) = timers.peek() {
+						thread::sleep(e.due - time::Instant::now());
+					} else {
+						// runtime thread will unpark sleeping thread to process any new timers
+						thread::park();
+					}
+				}
+			});
+
+			*queue = Some((sleeper.thread().clone(), sender));
+		}
+	});
 }
 
 /// Keeps track of when a timer is due, as well as a waker to poll the adjacent future.
@@ -40,83 +90,23 @@ impl Ord for TimerTracker {
 	}
 }
 
-/// Long running future that progresses execution of [`Sleep`] futures, must be spawned for [`Sleep`] to work
-pub struct SleepSubroutine;
-
-impl Unpin for SleepSubroutine {}
-
-impl Future for SleepSubroutine {
-	type Output = ();
-
-	fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-		// init waker if not initialized
-		WAKER.with_borrow_mut(|w| {
-			w.get_or_insert(cx.waker().clone());
-		});
-
-		// do our job as a sleep subroutine
-		let (zombies, earliest) = TIMERS.with_borrow_mut(|timers| {
-			let zombies = ZOMBIE_TIMERS.with_borrow_mut(|zombie_timers| {
-				let now = time::Instant::now();
-
-				// pop due timers from queue
-				while timers.peek().map(|t| t.due <= now).unwrap_or(false) {
-					if let Some(TimerTracker { waker_rx, .. }) = timers.pop() {
-						match waker_rx.try_recv() {
-							Ok(waker) => waker.wake(),
-							// timer is due, but hasn't been polled yet
-							Err(oneshot::TryRecvError::Empty) => zombie_timers.push(waker_rx),
-							// timer is due, but was dropped. either dropped itself or dropped prematurely
-							Err(oneshot::TryRecvError::Disconnected) => (),
-						}
-					}
-				}
-
-				// attempt to poll zombie timers
-				let mut old_zombies = Vec::with_capacity(zombie_timers.len());
-				for waker_rx in zombie_timers.drain(..) {
-					match waker_rx.try_recv() {
-						Ok(waker) => waker.wake(),
-						Err(oneshot::TryRecvError::Empty) => old_zombies.push(waker_rx),
-						Err(oneshot::TryRecvError::Disconnected) => (),
-					}
-				}
-
-				zombie_timers.append(&mut old_zombies);
-				zombie_timers.len()
-			});
-
-			(zombies, timers.peek().map(|t| t.due.clone()))
-		});
-
-		if zombies != 0 {
-			// busy loop, waiting for any zombies to resurrect
-			cx.waker().wake_by_ref()
-		} else {
-			// if we have any timers pending, sleep and wake task
-			if let Some(e) = earliest {
-				thread::sleep(e - time::Instant::now());
-				cx.waker().wake_by_ref()
-			}
-		}
-
-		task::Poll::Pending
-	}
-}
-
 /// Creates a new [`Sleep`] future
 pub fn sleep(dur: time::Duration) -> Sleep {
 	let due = time::Instant::now() + dur;
-
 	let (sender, waker_rx) = oneshot::channel();
 
-	TIMERS.with_borrow_mut(|t| t.push(TimerTracker { due, waker_rx }));
-	WAKER.with_borrow(|w| w.as_ref().map(|w| w.wake_by_ref()));
+	SLEEPING_THREAD.with_borrow(|s| match s {
+		Some((thread, sender)) => {
+			sender.send(TimerTracker { due, waker_rx }).unwrap();
+			// unpark sleeping thread
+			thread.unpark();
+		}
+		None => panic!("Sleeping thread has not been initialized"),
+	});
 
 	Sleep { due, sender: Some(sender), _marker: marker::PhantomData }
 }
 
-/// A sleeping future that doesn't poll itself, [`SleepSubroutine`] must be polled to progress execution.
 /// Immediately returns if `due` has already passed during the time of invocation.
 pub struct Sleep {
 	pub(crate) due: time::Instant,

@@ -1,5 +1,4 @@
-use alloc::boxed::Box;
-use core::{fmt, mem};
+use std::{fmt, mem};
 
 pub(crate) fn channel<T>() -> (Sender<T>, Receiver<T>) {
 	let status = Box::into_raw(Box::new(ChannelStatus::Pending));

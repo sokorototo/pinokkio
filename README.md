@@ -1,6 +1,6 @@
 ## `pinokkio`: A minimal, single-threaded async runtime.
 
-Basically one step above `pollster`, as it allows spawning tasks _and_ blocking the current thread. Currently for purely educational purposes. `wasm-bindgen` compatibility is WIP.
+Basically one step above `pollster`, as it allows spawning tasks. Currently for purely educational purposes. `wasm-bindgen` compatibility is WIP.
 
 ### 🧪 Sample Usage:
 
@@ -38,11 +38,9 @@ rt.block_on(monitor);
 
 ### 🧸 Extras:
 
-Enabled via the `timers` Cargo Feature, `pinokkio` contains an implementation of async timers. I have not read other implementations, mine is implemented with a `SleepSubroutine` that polls other `Sleep` futures:
- - Pros:
-   - Sleep futures don't poll themselves. They immediately return if already due, acting like a simple `futures::yield_now`.
- - Cons:
-   - Having state managed externally by `SleepSubroutine` means dropping the `Sleep` future before it's due results in a zombie timer. This is memory that is managed but never freed.
+Enabled via the `timers` Cargo Feature, `pinokkio` contains a simple implementation of async timers.
+ - Lightweight, no external dependencies and with decent resolution.
+ - Preemptive, uses a dedicated sleep thread to put process to sleep. Instead of busy looping waiting for the duration to expire.
 
 Spawns several tasks, each sleeping for a set duration and awaits their combined completion using `futures::join_all`
 
@@ -61,9 +59,6 @@ fn task<R: fmt::Display>(id: R) -> impl Future<Output = ()> {
       println!("[{}] Done sleeping", id);
    }
 }
-
-// initialize Sleep subroutine
-rt.spawn(timers::SleepSubroutine);
 
 let tasks = (0..5).map(|id| rt.spawn(task(id)));
 let join = futures::future::join_all(tasks);
