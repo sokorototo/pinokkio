@@ -94,7 +94,7 @@ fn green_threads_wait() {
 
 	let sleeping = async move {
 		let id = "sleeping";
-		let num_secs = 500;
+		let num_secs = 5;
 
 		println!("[{}] Sleeping for {}s", id, num_secs);
 		for i in 0..num_secs {
@@ -111,8 +111,9 @@ fn green_threads_wait() {
 		let id = "awaiting";
 		println!("[{}] Waiting for [{}]", id, "sleeping");
 
+		let then = time::Instant::now();
 		rx.await.unwrap();
-		println!("[{}] Done waiting", id);
+		println!("[{}] Done waiting: {:?}", id, then.elapsed());
 	};
 
 	let join = futures::future::join_all([rt.spawn(sleeping), rt.spawn(awaiting)]);
